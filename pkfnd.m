@@ -1,102 +1,161 @@
-function out=pkfnd(im,th,sz)
-% finds local maxima in an image to pixel level accuracy.   
-%  this provides a rough guess of particle
-%  centers to be used by cntrd.m.  Inspired by the lmx subroutine of Grier
-%  and Crocker's feature.pro
-% INPUTS:
-% im: image to process, particle should be bright spots on dark background with little noise
-%   ofen an bandpass filtered brightfield image (fbps.m, fflt.m or bpass.m) or a nice
-%   fluorescent image
-% th: the minimum brightness of a pixel that might be local maxima. 
-%   (NOTE: Make it big and the code runs faster
-%   but you might miss some particles.  Make it small and you'll get
-%   everything and it'll be slow.)
-% sz:  if your data's noisy, (e.g. a single particle has multiple local
-% maxima), then set this optional keyword to a value slightly larger than the diameter of your blob.  if
-% multiple peaks are found withing a radius of sz/2 then the code will keep
-% only the brightest.  Also gets rid of all peaks within sz of boundary
-%OUTPUT:  a N x 2 array containing, [row,column] coordinates of local maxima
-%           out(:,1) are the x-coordinates of the maxima
-%           out(:,2) are the y-coordinates of the maxima
-%CREATED: Eric R. Dufresne, Yale University, Feb 4 2005
-%MODIFIED: ERD, 5/2005, got rid of ind2rc.m to reduce overhead on tip by
-%  Dan Blair;  added sz keyword 
-% ERD, 6/2005: modified to work with one and zero peaks, removed automatic
-%  normalization of image
-% ERD, 6/2005: due to popular demand, altered output to give x and y
-%  instead of row and column
-% ERD, 8/24/2005: pkfnd now exits politely if there's nothing above
-%  threshold instead of crashing rudely
-% ERD, 6/14/2006: now exits politely if no maxima found
-% ERD, 10/5/2006:  fixed bug that threw away particles with maxima
-%  consisting of more than two adjacent points
+%
+% Finds particle positions in an image to pixel level accuracy. The outpu here is expected to be passed to cntrd().
+% Inspired by the lmx subroutine of Grier and Crocker's feature.pro
+%
+% est_pks = pkfnd( img, threshold, excl_dia )
+%
+% img:          2D array of image pixel values.
+%               Particles should be bright spots on a dark background with little noise.
+%               Often filtered with bpass() prior to here.
+%    
+% threshold:    The minimum brightness of a pixel that might be local maxima.
+%               Large values will result in faster code execution but you might miss some particles.
+%               Small values will result in slower code execution but you might get some false particles.
+%    
+% excl_dia:     If your data's noisy, (e.g. a single particle has multiple local maxima), then set this optional 
+%               keyword to a value slightly larger than the diameter of your blob. If multiple peaks are found 
+%               withing a radius of excl_dia/2 then the code will keep only the brightest. Also gets rid of all 
+%               peaks within excl_dia of image edge.
+%
+% returns:      N x 2 array containing, coordinates of local maxima.
+%
+%               Typically, the return is the input for cntrd().
+%
 
+%{
+      
+CHANGELOG:
 
+Feb 4 2005
+Written by Eric R. Dufresne, Yale University.
 
-%find all the pixels above threshold
-%im=im./max(max(im)); 
-ind=find(im > th);
-[nr,nc]=size(im);
-tst=zeros(nr,nc);
-n=length(ind);
-if n==0
-    out=[];
-    display('nothing above threshold');
-    return;
-end
-mx=[];
-%convert index from find to row and column
-rc=[mod(ind,nr),floor(ind/nr)+1];
-for i=1:n
-    r=rc(i,1);c=rc(i,2);
-    %check each pixel above threshold to see if it's brighter than it's neighbors
-    %  THERE'S GOT TO BE A FASTER WAY OF DOING THIS.  I'M CHECKING SOME MULTIPLE TIMES,
-    %  BUT THIS DOESN'T SEEM THAT SLOW COMPARED TO THE OTHER ROUTINES, ANYWAY.
-    if r>1 & r<nr & c>1 & c<nc
-        if im(r,c)>=im(r-1,c-1) & im(r,c)>=im(r,c-1) & im(r,c)>=im(r+1,c-1) & ...
-         im(r,c)>=im(r-1,c)  & im(r,c)>=im(r+1,c) &   ...
-         im(r,c)>=im(r-1,c+1) & im(r,c)>=im(r,c+1) & im(r,c)>=im(r+1,c+1)
-        mx=[mx,[r,c]']; 
-        %tst(ind(i))=im(ind(i));
+May 2005
+Got rid of ind2rc.m to reduce overhead on tip by Dan Blair. ERD
+Added sz keyword. ERD
+
+Jun 2005
+Modified to work with one and zero peaks, removed automatic normalization of image. ERD
+Due to popular demand, altered output to give x and y instead of row and column. ERD
+
+Aug 24 2005
+pkfnd now exits politely if there's nothing above threshold instead of crashing rudely. ERD
+
+Jun 14 2006 
+Now exits politely if no maxima found. ERD
+
+Oct 5 2006
+Fixed bug that threw away particles with maxima consisting of more than two adjacent points. ERD
+
+Jan 2023
+Reformated to meet commenting and nomenclecture standards. AC
+
+%}
+
+function est_pks = pkfnd( img, th, excl_dia )
+
+    if nargin ~= 3
+        warning('Not enough arguemts for pkfnd( img, th, excl_dia )') ;
+        est_pks = [ ] ;
+        return ;
+    end
+
+    [ pk_px_row, pk_px_col ] = find( img >= th ) ;
+
+    pk_px_num = length( pk_px_row ) ;
+
+    if pk_px_num == 0
+        warning( ['The provided image does not contain any pixel values above the ', num2str(th), ' pixel threshold set in pkfnd()'] ) ;
+        est_pks = [ ] ;
+        return;
+    end
+
+    [ img_rows, img_cols ] = size( img ) ;
+
+    pk_px_coords = [ ] ;
+
+    % Check each pixel above threshold to see if it's brighter than it's 8 neighbors.
+    for i = 1 : pk_px_num
+
+        row = pk_px_row( i ) ;
+        col = pk_px_col( i ) ;
+        
+        if row > 1 && row < img_rows ...
+        && col > 1 && col < img_cols
+        
+            range = -1 : 1 ;
+            border_pixels = max( [ max( img( row - 1 : 2 : row + 1, range + col ) , [] , 'all' ), max( img( row, col - 1 : 2 : col + 1 ) ) ] ) ;
+
+            if img( row, col ) >= border_pixels
+            
+                pk_px_coords = [ pk_px_coords, [ row, col ]' ] ;
+
+            end
         end
     end
-end
-%out=tst;
-mx=mx';
 
-[npks,crap]=size(mx);
+    pk_px_coords = pk_px_coords' ;
 
-%if size is specified, then get ride of pks within size of boundary
-if nargin==3 & npks>0
-   %throw out all pks within sz of boundary;
-    ind=find(mx(:,1)>sz & mx(:,1)<(nr-sz) & mx(:,2)>sz & mx(:,2)<(nc-sz));
-    mx=mx(ind,:); 
-end
+    [ pk_px_num, ~ ] = size( pk_px_coords ) ;
 
-%prevent from finding peaks within size of each other
-[npks,crap]=size(mx);
-if npks > 1 
-    %CREATE AN IMAGE WITH ONLY PEAKS
-    nmx=npks;
-    tmp=0.*im;
-    for i=1:nmx
-        tmp(mx(i,1),mx(i,2))=im(mx(i,1),mx(i,2));
+    excl_rad = floor( excl_dia / 2 ) ;
+
+    % If excl_dia is specified, then get ride of pks within excl_rad of image edges
+    if pk_px_num > 0
+
+        ind = find(...
+              pk_px_coords( :, 1 ) > excl_dia ...
+            & pk_px_coords( :, 1 ) < img_rows - excl_dia ...
+            & pk_px_coords( :, 2 ) > excl_dia ...
+            & pk_px_coords( :, 2 ) < img_cols - excl_dia ) ;
+
+        pk_px_coords = pk_px_coords( ind, : ) ;
+
     end
-    %LOOK IN NEIGHBORHOOD AROUND EACH PEAK, PICK THE BRIGHTEST
-    for i=1:nmx
-        roi=tmp( (mx(i,1)-floor(sz/2)):(mx(i,1)+(floor(sz/2)+1)),(mx(i,2)-floor(sz/2)):(mx(i,2)+(floor(sz/2)+1))) ;
-        [mv,indi]=max(roi);
-        [mv,indj]=max(mv);
-        tmp( (mx(i,1)-floor(sz/2)):(mx(i,1)+(floor(sz/2)+1)),(mx(i,2)-floor(sz/2)):(mx(i,2)+(floor(sz/2)+1)))=0;
-        tmp(mx(i,1)-floor(sz/2)+indi(indj)-1,mx(i,2)-floor(sz/2)+indj-1)=mv;
-    end
-    ind=find(tmp>0);
-    mx=[mod(ind,nr),floor(ind/nr)+1];
-end
 
-if size(mx)==[0,0]
-    out=[];
-else
-    out(:,2)=mx(:,1);
-    out(:,1)=mx(:,2);
-end
+    [ pk_px_num, ~ ] = size( pk_px_coords ) ;
+
+    % Elimate all but one peak within excl_dia
+    if nargin == 3 && pk_px_num > 1
+
+        pk_px_img = 0 .* img ;
+        
+        for i = 1 : pk_px_num
+
+            pk_px_img( pk_px_coords( i, 1 ), pk_px_coords( i, 2 ) ) = img( pk_px_coords( i, 1 ), pk_px_coords( i, 2 ) ) ;
+        
+        end
+        
+        for i = 1 : pk_px_num
+
+            roi = pk_px_img( ...
+                  pk_px_coords( i, 1 ) - excl_rad : pk_px_coords( i, 1 ) + excl_rad, ...
+                  pk_px_coords( i, 2 ) - excl_rad : pk_px_coords( i, 2 ) + excl_rad ) ;
+
+            [ roi_pk_px , roi_pk_px_ind ] = max( roi, [], 'all') ;
+            
+            [ roi_pk_px_row, roi_pk_px_col ] = ind2sub( size(roi), roi_pk_px_ind ) ;
+            
+            pk_px_img( pk_px_coords( i, 1 ) - excl_rad : pk_px_coords( i, 1 ) + excl_rad, ...
+                       pk_px_coords( i, 2 ) - excl_rad : pk_px_coords( i, 2 ) + excl_rad )...
+                       = 0 ;
+            
+            pk_px_img( pk_px_coords( i, 1 ) - excl_rad + roi_pk_px_row - 1, ...
+                       pk_px_coords( i, 2 ) - excl_rad + roi_pk_px_col - 1 )...
+                       = roi_pk_px ;
+
+        end
+
+        [ pk_px_row, pk_px_col ] = find( pk_px_img > 0 ) ;
+
+    end
+
+    if isempty( pk_px_row )
+        
+        est_pks = [ ] ;
+
+    else
+        
+        est_pks( :, 2 ) = pk_px_row ;
+        est_pks( :, 1 ) = pk_px_col ;
+
+    end

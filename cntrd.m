@@ -1,5 +1,4 @@
-function out=cntrd(im,mx,sz,interactive)
-% out=cntrd(im,mx,sz,interactive)
+% out=cntrd(im,est_pks,excl_dia,interactive)
 % 
 % PURPOSE:  calculates the centroid of bright spots to sub-pixel accuracy.
 %  Inspired by Grier & Crocker's feature for IDL, but greatly simplified and optimized
@@ -9,9 +8,9 @@ function out=cntrd(im,mx,sz,interactive)
 % im: image to process, particle should be bright spots on dark background with little noise
 %   ofen an bandpass filtered brightfield image or a nice fluorescent image
 %
-% mx: locations of local maxima to pixel-level accuracy from pkfnd.m
+% est_pks: locations of local maxima to pixel-level accuracy from pkfnd.m
 %
-% sz: diamter of the window over which to average to calculate the centroid.  
+% excl_dia: diamter of the window over which to average to calculate the centroid.  
 %     should be big enough
 %     to capture the whole particle but not so big that it captures others.  
 %     if initial guess of center (from pkfnd) is far from the centroid, the
@@ -25,8 +24,8 @@ function out=cntrd(im,mx,sz,interactive)
 % NOTE:
 %  - if pkfnd, and cntrd return more then one location per particle then
 %  you should try to filter your input more carefully.  If you still get
-%  more than one peak for particle, use the optional sz parameter in pkfnd
-%  - If you want sub-pixel accuracy, you need to have a lot of pixels in your window (sz>>1). 
+%  more than one peak for particle, use the optional excl_dia parameter in pkfnd
+%  - If you want sub-pixel accuracy, you need to have a lot of pixels in your window (excl_dia>>1). 
 %    To check for pixel bias, plot a histogram of the fractional parts of the resulting locations
 %  - It is HIGHLY recommended to run in interactive mode to adjust the parameters before you
 %    analyze a bunch of images.
@@ -36,108 +35,132 @@ function out=cntrd(im,mx,sz,interactive)
 %           out(:,2) is the y-coordinates
 %           out(:,3) is the brightnesses
 %           out(:,4) is the sqare of the radius of gyration
-%
-% CREATED: Eric R. Dufresne, Yale University, Feb 4 2005
-%  5/2005 inputs diamter instead of radius
-%  Modifications:
-%  D.B. (6/05) Added code from imdist/dist to make this stand alone.
-%  ERD (6/05) Increased frame of reject locations around edge to 1.5*sz
-%  ERD 6/2005  By popular demand, 1. altered input to be formatted in x,y
-%  space instead of row, column space  2. added forth column of output,
-%  rg^2
-%  ERD 8/05  Outputs had been shifted by [0.5,0.5] pixels.  No more!
-%  ERD 8/24/05  Woops!  That last one was a red herring.  The real problem
-%  is the "ringing" from the output of bpass.  I fixed bpass (see note),
-%  and no longer need this kludge.  Also, made it quite nice if mx=[];
-%  ERD 6/06  Added size and brightness output ot interactive mode.  Also 
-%   fixed bug in calculation of rg^2
-%  JWM 6/07  Small corrections to documentation 
+
+%{
+
+CHANGELOG:
+
+Feb 4 2005
+Written by Eric R. Dufresne, Yale University.
+
+May 2005
+Inputs diamter instead of radius
+
+Jun 2005
+Added code from imdist/dist to make this stand alone. DB
+
+Increased frame of reject locations around edge to 1.5*excl_dia ERD
+
+By popular demand, 
+1. altered input to be formatted in x,y space instead of row, column space. ERD
+2. added forth column of output, rg^2. ERD
+
+Aug 2005
+Outputs had been shifted by [0.5,0.5] pixels.  No more! ERD
+
+Aug 24 2005
+Woops!  That last one was a red herring.  The real problem is the "ringing" from the output of bpass.
+I fixed bpass (see note), and no longer need this kludge. Also, made it quite nice if est_pks=[]; ERD
+
+Jun 2006
+Added size and brightness output ot interactive mode. Also fixed bug in calculation of rg^2. ERD
+
+Jun 2007
+Small corrections to documentation. JWM
+
+Jan 2023
+Reformated to meet commenting and nomenclecture standards. AC
+Removed interactive option. AC
+Changed excl_rad such that we consider n pixels from the given peak where 2n + 1 is the input excl_dia.
+Removed filtering image edges of peaks and this is already happening in pkfnd(). AC
+Changed radius of giration calc. I dont trust rg = ( sum( tmp .* dst2, 'all' ) / norm ) ; since the applied mask influences
+the estimated radius.
+Changed the mask such that it is a pixellated circle of diameter = excl_dia rather than excl_dia - 1.
 
 
-if nargin==3
-   interactive=0; 
-end
-
-if sz/2 == floor(sz/2)
-warning('sz must be odd, like bpass');
-end
-
-if isempty(mx)
-    warning('there were no positions inputted into cntrd. check your pkfnd theshold')
-    out=[];
-    return;
-end
 
 
-r=(sz+1)/2;
-%create mask - window around trial location over which to calculate the centroid
-m = 2*r;
-x = 0:(m-1) ;
-cent = (m-1)/2;
-x2 = (x-cent).^2;
-dst=zeros(m,m);
-for i=1:m
-    dst(i,:)=sqrt((i-1-cent)^2+x2);
-end
+    % Create mask - window around trial location over which to calculate the centroid
 
-
-ind=find(dst < r);
-
-msk=zeros([2*r,2*r]);
-msk(ind)=1.0;
-%msk=circshift(msk,[-r,-r]);
-
-dst2=msk.*(dst.^2);
-ndst2=sum(sum(dst2));
-
-[nr,nc]=size(im);
-%remove all potential locations within distance sz from edges of image
-ind=find(mx(:,2) > 1.5*sz & mx(:,2) < nr-1.5*sz);
-mx=mx(ind,:);
-ind=find(mx(:,1) > 1.5*sz & mx(:,1) < nc-1.5*sz);
-mx=mx(ind,:);
-
-[nmx,crap] = size(mx);
-
-%inside of the window, assign an x and y coordinate for each pixel
-xl=zeros(2*r,2*r);
-for i=1:2*r
-    xl(i,:)=(1:2*r);
-end
-yl=xl';
-
-pts=[];
-%loop through all of the candidate positions
-for i=1:nmx
-    %create a small working array around each candidate location, and apply the window function
-    tmp=msk.*im((mx(i,2)-r+1:mx(i,2)+r),(mx(i,1)-r+1:mx(i,1)+r));
-    %calculate the total brightness
-    norm=sum(sum(tmp));
-    %calculate the weigthed average x location
-    xavg=sum(sum(tmp.*xl))./norm;
-    %calculate the weighted average y location
-    yavg=sum(sum(tmp.*yl))./norm;
-    %calculate the radius of gyration^2
-    %rg=(sum(sum(tmp.*dst2))/ndst2);
-    rg=(sum(sum(tmp.*dst2))/norm);
+    % msk_range = ( - excl_rad : excl_rad ) .^2 ;
     
-    %concatenate it up
-    pts=[pts,[mx(i,1)+xavg-r,mx(i,2)+yavg-r,norm,rg]'];
+    % cent_px = excl_rad + 1 ;
+
+    % circ_msk_inv = zeros( excl_dia ) ;
     
-    %OPTIONAL plot things up if you're in interactive mode
-    if interactive==1
-     imagesc(tmp)
-     axis image
-     hold on;
-     plot(xavg,yavg,'x')
-     plot(xavg,yavg,'o')
-     plot(r,r,'.')
-     hold off
-     title(['brightness ',num2str(norm),' size ',num2str(sqrt(rg))])
-     pause
+    % for i = 1 : excl_dia
+    %     circ_msk_inv( i, : ) = sqrt( ( i - cent_px ) ^2 + msk_range ) ;
+    % end
+
+    % ind = find( circ_msk_inv <= excl_rad ) ;
+
+    % circ_msk_binary = zeros( excl_dia ) ;
+
+    % circ_msk_binary( ind ) = 1.0 ;
+
+    % dst2 = circ_msk_binary .* ( circ_msk_inv .^2 ) ;
+
+%}
+
+function particles = cntrd( img, est_pks, excl_dia, apply_mask )
+
+    if rem( excl_dia, 2 ) == false 
+        warning('Exclusion diameter (excl_dia) must be an odd integer.') ;
+        out = est_pks ;
+        return ;
     end
 
-    
-end
-out=pts';
+    if isempty( est_pks )
+        warning('There were no estimated peaks (est_pks) provided. Maybe the threshold in pkfnd() is too high.')
+        out = [ ] ;
+        return;
+    end
 
+    % Number of pixels from the central pixel.
+    excl_rad = floor( excl_dia / 2 ) ;
+
+    if apply_mask == true
+
+        cent_px = excl_rad + 1 ;
+        % Create mask - window around trial location over which to calculate the centroid
+        circ_msk_binary = zeros( excl_dia ) ;  
+        circ_msk_binary( cent_px, cent_px ) = 1 ;    
+        circ_msk_binary = bwdist( circ_msk_binary );
+        circ_msk_binary = circ_msk_binary <= excl_rad;
+    
+    else
+
+        circ_msk_binary = 1 ;
+    end
+
+    msk_ind_x = zeros( excl_dia ) ;
+
+    for n = 1 : excl_dia, msk_ind_x( n, : ) = ( 0 : excl_dia - 1 ) ; end
+    
+    msk_ind_y = msk_ind_x' ;
+
+    [ est_pks_num, ~ ] = size( est_pks ) ;
+
+    particles = zeros( est_pks_num , 4 ) ;
+
+    % Loop through all of the candidate positions
+    for n = 1 : est_pks_num
+        
+        tmp = circ_msk_binary .* ... 
+                img( ( est_pks( n, 2 ) - excl_rad  : est_pks( n, 2 ) + excl_rad ), ...
+                     ( est_pks( n, 1 ) - excl_rad  : est_pks( n, 1 ) + excl_rad ) ) ;
+
+        tot_br = sum( tmp, 'all' ) ;
+
+        wght_ave_x = sum( tmp .* msk_ind_x, 'all' ) / tot_br - excl_rad ;
+
+        wght_ave_y = sum( tmp .* msk_ind_y, 'all' ) / tot_br - excl_rad ;
+
+        % Calculate an estimate of the particles diameter based on radius of gyration
+        rad_gyr = 2 * sqrt( sum( (tmp) .^2 , 'all' ) / numel( tmp ) / 255 ) ;
+
+        pk_val = max( tmp, [],'all' ) ;
+        
+        particles( n, : ) = [ est_pks( n, 1 ) + wght_ave_x, est_pks( n, 2 ) + wght_ave_y, pk_val, rad_gyr ] ;
+                
+    end
