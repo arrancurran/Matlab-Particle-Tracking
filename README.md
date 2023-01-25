@@ -1,4 +1,4 @@
-#Particle Tracking tailored for the Dullens Lab
+# Particle Tracking tailored for the Dullens Lab
 
 The Matlab Particle Tracking Code origanally developed by Daniel Blair and Eric Dufresne, based on the IDL lagorythms developed by David Grier, John Crocker and Eric Weeks.
 
