@@ -1,6 +1,10 @@
 %
-% Finds particle positions in an image to pixel level accuracy. The outpu here is expected to be passed to cntrd().
-% Inspired by the lmx subroutine of Grier and Crocker's feature.pro
+% Finds particle positions in an image to pixel level accuracy. The output here is expected to be passed to cntrd().
+%
+% After inits, first loops through all peak pixels and checks to see if it is the brightest in a 3 x 3 array (i.e. 8 nearest neighbours).
+% Then we exclude all peak pixels whos coordinates lie with the exclusion distance from the image edges.
+% Final step is to elimate all but the brightest pixel within the an area given by excl_dia.
+%
 %
 % est_pks = pkfnd( img, threshold, excl_dia )
 %
@@ -21,9 +25,19 @@
 %
 %               Typically, the return is the input for cntrd().
 %
+% Inspired by the lmx subroutine of Grier and Crocker's feature.pro
 
 %{
-      
+
+NOTES:
+
+When comparing px value with nearest 8 neigbours, the instinct may be to first gather the 8, find the max then compare once, i.e.
+
+    border_pixels = max( [ max( img( row - 1 : 2 : row + 1, range + col ) , [] , 'all' ), max( img( row, col - 1 : 2 : col + 1 ) ) ] ) ;
+    if img( row, col ) >= border_pixels
+
+but this is about 5 x slower than just directly comparing every pixel!
+
 CHANGELOG:
 
 Feb 4 2005
@@ -59,9 +73,17 @@ function est_pks = pkfnd( img, th, excl_dia )
         return ;
     end
 
+    if rem( excl_dia, 2 ) == false 
+        warning('Exclusion diameter (excl_dia) must be an odd integer.') ;
+        est_pks = [ ] ;
+        return ;
+    end
+
+    if isa( img, 'double' ) ~= 1, img = double( img ) ; end
+
     [ pk_px_row, pk_px_col ] = find( img >= th ) ;
 
-    pk_px_num = length( pk_px_row ) ;
+    pk_px_num = length( pk_px_row )
 
     if pk_px_num == 0
         warning( ['The provided image does not contain any pixel values above the ', num2str(th), ' pixel threshold set in pkfnd()'] ) ;
@@ -71,29 +93,31 @@ function est_pks = pkfnd( img, th, excl_dia )
 
     [ img_rows, img_cols ] = size( img ) ;
 
-    pk_px_coords = [ ] ;
+    pk_px_coords = zeros( pk_px_num, 2 ) ; cnt = 1 ;
 
     % Check each pixel above threshold to see if it's brighter than it's 8 neighbors.
-    for i = 1 : pk_px_num
+    for n = 1 : pk_px_num
 
-        row = pk_px_row( i ) ;
-        col = pk_px_col( i ) ;
+        row = pk_px_row( n ) ;
+        col = pk_px_col( n ) ;
         
         if row > 1 && row < img_rows ...
         && col > 1 && col < img_cols
-        
-            range = -1 : 1 ;
-            border_pixels = max( [ max( img( row - 1 : 2 : row + 1, range + col ) , [] , 'all' ), max( img( row, col - 1 : 2 : col + 1 ) ) ] ) ;
 
-            if img( row, col ) >= border_pixels
+            if img( row, col ) >= img( row,     col + 1 ) ...
+            && img( row, col ) >= img( row - 1, col + 1 ) ...
+            && img( row, col ) >= img( row - 1, col     ) ...
+            && img( row, col ) >= img( row - 1, col - 1 ) ...
+            && img( row, col ) >= img( row,     col - 1 ) ...
+            && img( row, col ) >= img( row + 1, col - 1 ) ...
+            && img( row, col ) >= img( row + 1, col     ) ...
+            && img( row, col ) >= img( row + 1, col + 1 )
             
-                pk_px_coords = [ pk_px_coords, [ row, col ]' ] ;
+                pk_px_coords( cnt, : ) = [ row, col ] ; cnt = cnt + 1 ;
 
             end
         end
     end
-
-    pk_px_coords = pk_px_coords' ;
 
     [ pk_px_num, ~ ] = size( pk_px_coords ) ;
 
@@ -117,30 +141,34 @@ function est_pks = pkfnd( img, th, excl_dia )
     % Elimate all but one peak within excl_dia
     if nargin == 3 && pk_px_num > 1
 
-        pk_px_img = 0 .* img ;
+        pk_px_img = zeros( img_rows, img_cols ) ;
         
-        for i = 1 : pk_px_num
+        for n = 1 : pk_px_num
 
-            pk_px_img( pk_px_coords( i, 1 ), pk_px_coords( i, 2 ) ) = img( pk_px_coords( i, 1 ), pk_px_coords( i, 2 ) ) ;
+            pk_px_img( pk_px_coords( n, 1 ), pk_px_coords( n, 2 ) ) = img( pk_px_coords( n, 1 ), pk_px_coords( n, 2 ) ) ;
         
         end
         
-        for i = 1 : pk_px_num
+        for n = 1 : pk_px_num
 
             roi = pk_px_img( ...
-                  pk_px_coords( i, 1 ) - excl_rad : pk_px_coords( i, 1 ) + excl_rad, ...
-                  pk_px_coords( i, 2 ) - excl_rad : pk_px_coords( i, 2 ) + excl_rad ) ;
+                  pk_px_coords( n, 1 ) - excl_rad : pk_px_coords( n, 1 ) + excl_rad, ...
+                  pk_px_coords( n, 2 ) - excl_rad : pk_px_coords( n, 2 ) + excl_rad ) ;
 
             [ roi_pk_px , roi_pk_px_ind ] = max( roi, [], 'all') ;
+
+            % Here we could ask if the found max is near the centre of the current roi and if not immediatley replace the roi over it.
+            % this would prevent ever repetition in the same area, like in the situation where there are enough pk_pxs
+            % with a particle such that the first roi only gets some of the pk_pxs and we later will have to repeat.
             
-            [ roi_pk_px_row, roi_pk_px_col ] = ind2sub( size(roi), roi_pk_px_ind ) ;
+            [ roi_pk_px_row, roi_pk_px_col ] = ind2sub( size( roi ), roi_pk_px_ind ) ;
             
-            pk_px_img( pk_px_coords( i, 1 ) - excl_rad : pk_px_coords( i, 1 ) + excl_rad, ...
-                       pk_px_coords( i, 2 ) - excl_rad : pk_px_coords( i, 2 ) + excl_rad )...
+            pk_px_img( pk_px_coords( n, 1 ) - excl_rad : pk_px_coords( n, 1 ) + excl_rad, ...
+                       pk_px_coords( n, 2 ) - excl_rad : pk_px_coords( n, 2 ) + excl_rad )...
                        = 0 ;
             
-            pk_px_img( pk_px_coords( i, 1 ) - excl_rad + roi_pk_px_row - 1, ...
-                       pk_px_coords( i, 2 ) - excl_rad + roi_pk_px_col - 1 )...
+            pk_px_img( pk_px_coords( n, 1 ) - excl_rad + roi_pk_px_row - 1, ...
+                       pk_px_coords( n, 2 ) - excl_rad + roi_pk_px_col - 1 )...
                        = roi_pk_px ;
 
         end

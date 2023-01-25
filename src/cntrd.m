@@ -1,40 +1,37 @@
-% out=cntrd(im,est_pks,excl_dia,interactive)
+%
+% Calculates the centroid of bright spots to sub-pixel accuracy.
+%
+% particles = cntrd( img, est_pks, excl_dia )
 % 
-% PURPOSE:  calculates the centroid of bright spots to sub-pixel accuracy.
-%  Inspired by Grier & Crocker's feature for IDL, but greatly simplified and optimized
-%  for matlab
+% img:          2D array of image pixel values.
+%               Particles should be bright spots on a dark background with little noise.
+%               Often filtered with bpass() prior to here.
+%
+% est_pks:      Estimated locations of local maxima to pixel-level accuracy from pkfnd().
+%
+% excl_dia:     If your data's noisy, (e.g. a single particle has multiple local maxima), then set this optional 
+%               keyword to a value slightly larger than the diameter of your blob. If multiple peaks are found 
+%               withing a radius of excl_dia/2 then the code will keep only the brightest. Also gets rid of all 
+%               peaks within excl_dia of image edge.
+%
+% returns:      N x 4 array containing, x, y, total brightness and estimated radii for each feature
+%
+%               particles(:,1) is the x-coordinates.
+%               particles(:,2) is the y-coordinates.
+%               particles(:,3) is the brightnesses.
+%               particles(:,4) is the estimated radii.
+%
+% NOTES:
+%
+% If pkfnd(), and cntrd() return more than one location per particle then
+% you should try to filter your input more carefully. If you still get
+% more than one peak for a particle, use the optional excl_dia parameter 
+% in pkfnd().
 % 
-% INPUT:
-% im: image to process, particle should be bright spots on dark background with little noise
-%   ofen an bandpass filtered brightfield image or a nice fluorescent image
+% If you want sub-pixel accuracy, you need to have a lot of pixels in your 
+% window (excl_dia>>1). To check for pixel bias, plot a histogram of the 
+% fractional parts of the resulting locations.
 %
-% est_pks: locations of local maxima to pixel-level accuracy from pkfnd.m
-%
-% excl_dia: diamter of the window over which to average to calculate the centroid.  
-%     should be big enough
-%     to capture the whole particle but not so big that it captures others.  
-%     if initial guess of center (from pkfnd) is far from the centroid, the
-%     window will need to be larger than the particle size.  RECCOMMENDED
-%     size is the long lengthscale used in bpass plus 2.
-%     
-%
-% interactive:  OPTIONAL INPUT set this variable to one and it will show you the image used to calculate  
-%    each centroid, the pixel-level peak and the centroid
-%
-% NOTE:
-%  - if pkfnd, and cntrd return more then one location per particle then
-%  you should try to filter your input more carefully.  If you still get
-%  more than one peak for particle, use the optional excl_dia parameter in pkfnd
-%  - If you want sub-pixel accuracy, you need to have a lot of pixels in your window (excl_dia>>1). 
-%    To check for pixel bias, plot a histogram of the fractional parts of the resulting locations
-%  - It is HIGHLY recommended to run in interactive mode to adjust the parameters before you
-%    analyze a bunch of images.
-%
-% OUTPUT:  a N x 4 array containing, x, y and brightness for each feature
-%           out(:,1) is the x-coordinates
-%           out(:,2) is the y-coordinates
-%           out(:,3) is the brightnesses
-%           out(:,4) is the sqare of the radius of gyration
 
 %{
 
@@ -44,7 +41,7 @@ Feb 4 2005
 Written by Eric R. Dufresne, Yale University.
 
 May 2005
-Inputs diamter instead of radius
+Inputs diamter instead of radius.
 
 Jun 2005
 Added code from imdist/dist to make this stand alone. DB
@@ -76,7 +73,7 @@ Removed filtering image edges of peaks and this is already happening in pkfnd().
 Changed radius of giration calc. I dont trust rg = ( sum( tmp .* dst2, 'all' ) / norm ) ; since the applied mask influences
 the estimated radius.
 Changed the mask such that it is a pixellated circle of diameter = excl_dia rather than excl_dia - 1.
-
+Added option to include mask or not.
 
 
 
@@ -101,18 +98,19 @@ Changed the mask such that it is a pixellated circle of diameter = excl_dia rath
     % dst2 = circ_msk_binary .* ( circ_msk_inv .^2 ) ;
 
 %}
-
 function particles = cntrd( img, est_pks, excl_dia, apply_mask )
+
+    if isa( img, 'double' ) ~= 1, img = double( img ) ; end
 
     if rem( excl_dia, 2 ) == false 
         warning('Exclusion diameter (excl_dia) must be an odd integer.') ;
-        out = est_pks ;
+        particles = [ ] ;
         return ;
     end
 
     if isempty( est_pks )
         warning('There were no estimated peaks (est_pks) provided. Maybe the threshold in pkfnd() is too high.')
-        out = [ ] ;
+        particles = [ ] ;
         return;
     end
 
@@ -129,9 +127,10 @@ function particles = cntrd( img, est_pks, excl_dia, apply_mask )
         circ_msk_binary = circ_msk_binary <= excl_rad;
     
     else
-
         circ_msk_binary = 1 ;
     end
+    
+    % figure ; imagesc( circ_msk_binary )
 
     msk_ind_x = zeros( excl_dia ) ;
 
@@ -156,10 +155,10 @@ function particles = cntrd( img, est_pks, excl_dia, apply_mask )
 
         wght_ave_y = sum( tmp .* msk_ind_y, 'all' ) / tot_br - excl_rad ;
 
-        % Calculate an estimate of the particles diameter based on radius of gyration
-        rad_gyr = 2 * sqrt( sum( (tmp) .^2 , 'all' ) / numel( tmp ) / 255 ) ;
-
         pk_val = max( tmp, [],'all' ) ;
+
+        % Calculate an estimate of the particles diameter based on radius of gyration
+        rad_gyr = 2 * sqrt( sum( tmp .^2, 'all' ) / numel( tmp ) / pk_val ) ;
         
         particles( n, : ) = [ est_pks( n, 1 ) + wght_ave_x, est_pks( n, 2 ) + wght_ave_y, pk_val, rad_gyr ] ;
                 
